@@ -1,0 +1,11 @@
+# Core (works anywhere, including this machine)
+numpy>=1.26,<2.0
+pandas>=2.2
+scipy>=1.12
+matplotlib>=3.8
+pytest>=8.0
+
+# CARLA + RL (Colab only — CARLA server must be running; see notebooks/00_colab_setup.ipynb)
+carla==0.9.15
+gymnasium>=0.29
+stable-baselines3>=2.3
