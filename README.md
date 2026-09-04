@@ -38,7 +38,53 @@ choices (negotiation formalization, string-effect metric, failure-mode
 taxonomy, density x strategy grid, bootstrap CIs) was chosen to be
 competitive against existing published work in this space.
 
-## Repository layout
+## Second track: vision + communication-richness + MARL (`src/vision_comm/`)
+
+The user's mentor (Alaa DAOUD / Srinivasa K.G.) specified a different research
+question for the assigned project: **"How does the amount and type of shared
+perception information affect safety, efficiency, and communication cost in
+cooperative highway merging?"** This is a genuinely different experimental
+axis from the negotiation-strategy track above — instead of comparing
+*decision strategies*, it compares *how much a CAV shares with another CAV*:
+
+- **A. Local only** — each CAV decides using only its own camera's YOLO+ByteTrack
+  perception, no V2V communication.
+- **B. State sharing** — CAVs additionally broadcast their own true kinematic
+  state (position/speed/accel/lane/intent) — cheap, but only covers the sender.
+- **C. Semantic/object sharing** — CAVs additionally broadcast their full list
+  of *locally detected objects* — larger messages, but can reveal a vehicle
+  the receiver's own camera can't see (occlusion).
+- **D. Compact neural-feature sharing** — **not implemented**; the mentor's own
+  scoping slide says to defer this until B vs C is working, so `comm.py`
+  raises `NotImplementedError` for it rather than silently approximating it.
+
+Decision-making uses **IPPO** (Independent PPO — each CAV is its own PPO
+learner sharing a synchronized CARLA environment), implemented from scratch
+in PyTorch in `vision_comm/ippo.py` rather than via a full MARL framework —
+see the plan file for why. Both CAVs' policies output the same
+YIELD/HOLD/ACCELERATE vocabulary used by the negotiation track, through the
+same shared `merge_sim.controller.SharedController`, preserving the
+"decision quality, not driving skill" comparison principle across both tracks.
+
+```
+src/vision_comm/
+  comm.py                  # message schemas + exact byte-size accounting for A/B/C (D stubbed) — NO CARLA dependency, unit tested
+  perception_geometry.py    # pinhole-camera math: range/bearing/world-position/velocity from a tracked bbox — NO CARLA dependency, unit tested
+  comm_metrics.py            # detection precision/recall (IoU), tracking ID-switch count, communication cost aggregation — NO CARLA dependency, unit tested
+  ippo.py                     # from-scratch Independent PPO trainer (PyTorch) — NO CARLA dependency, tested against a tiny synthetic 2-agent env
+  perception.py                # YOLO+ByteTrack wrapper over a CAV's RGB camera — requires CARLA + ultralytics
+  scenario.py                   # MultiAgentMergeScenario: 2 learning CAVs + cameras + comm conditions — requires CARLA
+  train.py, comm_experiment_grid.py  # per-condition IPPO training + resumable evaluation grid — requires CARLA
+```
+
+Run order on Colab (after `00_colab_setup.ipynb`'s CARLA connection works):
+`scripts/train_ippo.py --condition B` (repeat per condition A/B/C) →
+`scripts/run_comm_grid.py` (resumable, writes `results/comm_episodes.csv`) →
+reuse `notebooks/02_analysis.ipynb`'s pattern for stats/figures (it's generic
+over any CSV with a condition/density column — just point it at
+`comm_episodes.csv` and relabel "strategy" as "condition" in your head).
+
+## Repository layout (negotiation-strategy track)
 
 ```
 src/merge_sim/
@@ -67,15 +113,20 @@ results/ # raw_episodes.csv (append-only), figures/, report.md land here
 ## Why some modules need CARLA and some don't
 
 This machine has no GPU and no CARLA install, so `negotiation_protocol.py`,
-`metrics.py`, `failure_modes.py`, and the entire `analysis/` package were
-built to have **zero CARLA dependency** and are fully unit tested here
-(`pytest tests/` — 33 tests, all passing). The CARLA-dependent modules
+`metrics.py`, `failure_modes.py`, the entire `analysis/` package, and (in
+the second track) `comm.py`, `perception_geometry.py`, `comm_metrics.py`,
+and `ippo.py` were all built to have **zero CARLA dependency** and are
+fully unit tested here (`pytest tests/` — 85 tests, all passing, including
+an IPPO test that actually verifies the PPO update converges on a synthetic
+task, not just that the code runs). The CARLA-dependent modules
 (`carla_utils.py`, `controller.py`, `scenario.py`, `strategies/*`,
-`episode_runner.py`, `experiment_grid.py`, `rl_env.py`) are written against
-the documented CARLA 0.9.15 Python API but have **not been executed
-against a live server** — their first real test happens on Colab. They are
-kept small and single-purpose specifically so any bug found there is easy
-to localize.
+`episode_runner.py`, `experiment_grid.py`, `rl_env.py`, and in
+`vision_comm/`: `perception.py`, `scenario.py`, `train.py`,
+`comm_experiment_grid.py`) are written against the documented CARLA 0.9.15
+API (and, for the vision track, `ultralytics`'s documented YOLO+ByteTrack
+API) but have **not been executed against a live server** — their first
+real test happens on Colab. They are kept small and single-purpose
+specifically so any bug found there is easy to localize.
 
 ## Running on Google Colab
 

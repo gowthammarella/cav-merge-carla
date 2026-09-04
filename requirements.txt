@@ -4,8 +4,12 @@ pandas>=2.2
 scipy>=1.12
 matplotlib>=3.8
 pytest>=8.0
+torch>=2.1  # backs vision_comm/ippo.py's from-scratch IPPO trainer; already installed on this machine
 
 # CARLA + RL (Colab only — CARLA server must be running; see notebooks/00_colab_setup.ipynb)
 carla==0.9.15
 gymnasium>=0.29
 stable-baselines3>=2.3
+
+# Vision + communication track (Colab only, same Python 3.10 venv as CARLA)
+ultralytics>=8.2  # YOLO detection + built-in ByteTrack tracker via .track(tracker="bytetrack.yaml")
