@@ -7,6 +7,7 @@ not interchangeable across conditions. Requires `carla`, `ultralytics`,
 """
 from __future__ import annotations
 
+import copy
 import pickle
 from pathlib import Path
 
@@ -29,7 +30,40 @@ def train_condition(
     try:
         config = IPPOConfig(obs_dim=scenario.obs_dim, n_actions=scenario.n_actions)
         trainer = IPPOTrainer(scenario, config, seed=seed)
-        history = trainer.train(n_iterations=n_iterations, steps_per_rollout=steps_per_rollout)
+
+        # Checkpoint the BEST iteration, not the last one. PPO does not
+        # improve monotonically, so saving whatever the final iteration
+        # happened to produce can ship a policy that was worse than one
+        # reached earlier in the same run.
+        history = []
+        best_score = float("-inf")
+        best_state_dicts = None
+        best_iteration = -1
+
+        for iteration in range(n_iterations):
+            rollout_stats = trainer.collect_rollout(steps_per_rollout)
+            update_stats = trainer.update()
+            history.append({**rollout_stats, "update": update_stats})
+
+            returns = [
+                rollout_stats[f"{aid}_mean_episode_return"] for aid in scenario.agent_ids
+            ]
+            # NaN means no episode finished inside this rollout — not a score
+            if any(r != r for r in returns):
+                continue
+            score = sum(returns) / len(returns)
+            if score > best_score:
+                best_score = score
+                best_iteration = iteration
+                best_state_dicts = {
+                    aid: copy.deepcopy(trainer.agents[aid].net.state_dict())
+                    for aid in scenario.agent_ids
+                }
+
+        if best_state_dicts is None:  # no rollout ever completed an episode
+            best_state_dicts = {
+                aid: trainer.agents[aid].net.state_dict() for aid in scenario.agent_ids
+            }
 
         models_dir.mkdir(parents=True, exist_ok=True)
         out_path = models_dir / f"ippo_condition_{condition.value}.pkl"
@@ -37,11 +71,11 @@ def train_condition(
             pickle.dump(
                 {
                     "condition": condition.value,
-                    "agent_state_dicts": {
-                        aid: trainer.agents[aid].net.state_dict() for aid in scenario.agent_ids
-                    },
+                    "agent_state_dicts": best_state_dicts,
                     "config": config,
                     "history": history,
+                    "best_iteration": best_iteration,
+                    "best_mean_return": best_score,
                 },
                 f,
             )

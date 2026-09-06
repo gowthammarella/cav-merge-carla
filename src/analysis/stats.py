@@ -21,6 +21,33 @@ DEFAULT_METRICS = (
     "string_effect_speed_drop_mps",
 )
 
+# `metrics.min_ttc` returns +inf when the vehicles never close, and a very
+# large finite value when they close almost imperceptibly (a near-zero
+# denominator). Both are correct as raw TTC but neither is meaningful as a
+# safety number, and a handful of them drags a cell's mean into the
+# thousands of seconds while collapsing its bootstrap CI onto that one
+# outlier. Anything past this bound is "not a safety-relevant interaction",
+# so it is clipped to the bound rather than dropped — dropping it would
+# silently reduce n and bias the cell toward its riskiest episodes.
+TTC_CLIP_S = 30.0
+UNBOUNDED_METRIC_CLIPS = {"min_ttc_s": TTC_CLIP_S}
+
+
+def clip_unbounded_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Bounds metrics that are legitimately unbounded above (see
+    `TTC_CLIP_S`). Idempotent, and returns a copy — callers never mutate
+    the DataFrame they were handed.
+    """
+    out = df.copy()
+    for metric, upper in UNBOUNDED_METRIC_CLIPS.items():
+        if metric in out.columns:
+            out[metric] = (
+                pd.to_numeric(out[metric], errors="coerce")
+                .replace([-np.inf], np.nan)
+                .clip(upper=upper)
+            )
+    return out
+
 
 def bootstrap_ci(values: np.ndarray, n_boot: int = 2000, ci: float = 0.95, seed: int = 0) -> tuple[float, float, float]:
     """Returns (mean, lower, upper) using a percentile bootstrap. Ignores
@@ -45,6 +72,7 @@ def summarize(df: pd.DataFrame, metrics: Iterable[str] = DEFAULT_METRICS) -> pd.
     """One row per (strategy, density), with success rate and a bootstrap
     mean/CI for each metric in `metrics`.
     """
+    df = clip_unbounded_metrics(df)
     rows = []
     for (strategy, density), group in df.groupby(["strategy", "density"]):
         row = {
@@ -68,6 +96,7 @@ def kruskal_wallis_by_density(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     `metric` at all? Run this before pairwise tests to avoid multiple-
     comparison fishing.
     """
+    df = clip_unbounded_metrics(df)
     rows = []
     for density, group in df.groupby("density"):
         samples = [
@@ -88,7 +117,7 @@ def pairwise_mannwhitney(df: pd.DataFrame, metric: str, density: str) -> pd.Data
     for multiple comparisons (e.g. Bonferroni) across the resulting rows
     if reporting many metrics at once.
     """
-    subset = df[df["density"] == density]
+    subset = clip_unbounded_metrics(df)[df["density"] == density]
     strategies = sorted(subset["strategy"].unique())
     rows = []
     for i, s1 in enumerate(strategies):

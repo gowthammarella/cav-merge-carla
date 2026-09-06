@@ -132,6 +132,14 @@ class IPPOConfig:
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
+    # Advantage normalisation divides by the batch standard deviation. Once a
+    # policy has essentially solved its task every advantage is near-identical,
+    # so that std collapses toward zero and mean-centring hands roughly half of
+    # the *correct* actions a negative advantage — which flips a converged
+    # policy in a single update (observed: p(correct action) 0.994 -> 0.007).
+    # Below this floor the batch carries no usable ranking signal, so the
+    # policy gradient is zeroed for that update and only the value head learns.
+    advantage_std_floor: float = 1e-2
 
 
 class IPPOAgent:
@@ -156,7 +164,12 @@ class IPPOAgent:
             buf.rewards, buf.values, buf.dones, last_value,
             gamma=self.config.gamma, lam=self.config.gae_lambda,
         )
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        adv_std = float(advantages.std())
+        if adv_std > self.config.advantage_std_floor:
+            advantages = (advantages - advantages.mean()) / adv_std
+        else:
+            # degenerate batch (see IPPOConfig.advantage_std_floor)
+            advantages = np.zeros_like(advantages)
 
         obs = torch.as_tensor(np.array(buf.obs), dtype=torch.float32)
         actions = torch.as_tensor(np.array(buf.actions), dtype=torch.long)
@@ -199,7 +212,11 @@ class IPPOAgent:
                 losses.append(float(loss.item()))
 
         self.buffer.clear()
-        return {"mean_loss": float(np.mean(losses)) if losses else 0.0}
+        return {
+            "mean_loss": float(np.mean(losses)) if losses else 0.0,
+            "advantage_std": adv_std,
+            "advantages_degenerate": adv_std <= self.config.advantage_std_floor,
+        }
 
 
 class IPPOTrainer:

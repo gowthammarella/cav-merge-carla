@@ -27,6 +27,15 @@ from typing import Optional
 import numpy as np
 
 
+# Speed increment a YIELD sheds, and the comfort limits it is shed/regained
+# at. YIELD_SPEED_REDUCTION_MPS mirrors `YIELD_SPEED_MARGIN_MPS` in
+# strategies/negotiation.py and strategies/rule_based.py — the utility model
+# must cost the manoeuvre the strategies actually perform.
+YIELD_SPEED_REDUCTION_MPS = 3.0
+COMFORTABLE_DECEL_MPS2 = 2.0
+COMFORTABLE_ACCEL_MPS2 = 1.5
+
+
 class ResponseType(Enum):
     YIELD = "yield"
     HOLD = "hold"
@@ -147,9 +156,17 @@ def estimate_own_delay_s(response: ResponseType, state: MainLaneState) -> float:
     COUNTER_OFFER costs a small negotiation overhead.
     """
     if response is ResponseType.YIELD:
-        # decelerating and re-accelerating costs roughly speed / comfortable_decel
-        comfortable_decel = 2.0  # m/s^2
-        return state.own_speed_mps / comfortable_decel * 0.5
+        # Yielding sheds a bounded speed increment and then recovers it — the
+        # strategies slow to (ramp_speed - YIELD_SPEED_REDUCTION_MPS), they do
+        # NOT decelerate to a stop. Costing this as `own_speed / decel` charged
+        # a full-stop-and-restart for what is a ~3 m/s dip, which at highway
+        # speed (18-25 m/s in scenario.py) made YIELD's delay term alone
+        # exceed everything the risk and courtesy terms could ever return —
+        # so YIELD was unreachable above ~8.5 m/s regardless of the weights.
+        # Time lost = the time to shed dv plus the time to regain it, each
+        # counted at half (the vehicle is still moving throughout).
+        dv = min(YIELD_SPEED_REDUCTION_MPS, state.own_speed_mps)
+        return dv / (2.0 * COMFORTABLE_DECEL_MPS2) + dv / (2.0 * COMFORTABLE_ACCEL_MPS2)
     if response is ResponseType.HOLD:
         return 0.5
     if response is ResponseType.ACCELERATE:
